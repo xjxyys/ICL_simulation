@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 C1 = 7
 C2 = 4
 
-load_dotenv('.env')
-openai.api_key = os.getenv("OPENAI_API_KEY")
 # 设置代理，本机端口7890
 # os.environ['http_proxy'] = 'http://127.0.0.1:7890'
 # os.environ['https_proxy'] = 'https://127.0.0.1:7890'
@@ -133,4 +131,32 @@ class ChatGPTInfer(Infer):
         )
         return response.choices[0].message.content
     
+def get_average_cost(order, DemandLambda):
+    """
+    计算给定订货量、需求率和成本条件下的平均成本。
     
+    参数:
+    order -- 订货量
+    DemandLambda -- 需求的泊松分布率（平均需求量）
+    C1 -- 单位脱销成本
+    C2 -- 单位滞销成本
+    返回:
+    avg_cost -- 平均成本
+    """
+    # 初始化平均成本
+    avg_cost = 0
+    # 计算最大可能需求，这里我们取3倍的平均需求，通常足以涵盖大部分概率
+    max_demand = int(3 * DemandLambda)
+    # 对所有可能的需求量求和
+    for demand in range(max_demand + 1):
+        # 计算泊松分布在该需求量的概率
+        probability = poisson.pmf(demand, DemandLambda)
+        # 如果需求大于订单，计算脱销成本
+        if demand > order:
+            cost = C1 * (demand - order)
+        # 否则计算滞销成本
+        else:
+            cost = C2 * (order - demand)
+        # 将概率加权的成本加到总成本中
+        avg_cost += probability * cost
+    return avg_cost
