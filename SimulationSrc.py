@@ -115,13 +115,28 @@ class ChatGPTInfer(Infer):
         prompt += "The data consists of tuples representing the order quantity and the observed demand for each day: "
         prompt += str(self.data) + " "
         # 需要加上脱销损失和滞销损失
-        prompt += "The cost of overstocking is " + str(C1) + " and the cost of understocking is " + str(C2) + "."
+        prompt += "The cost of overstocking is " + str(C2) + " and the cost of understocking is " + str(C1) + "."
         prompt += "Please just output the optimal order quantity for next day."
         return prompt
     
+    def get_prompt_new(self):
+        """根据建议，用selling price和ordering cost的方式来构建prompt
+        """
+        prompt = "Based on the historical order and demand data provided below, infer the optimal order quantity. "
+        prompt += "The data consists of tuples representing the order quantity and the observed demand for each day: "
+        prompt += str(self.data) + " "
+        # 使用销售价格和订货成本
+        selling_price = C1 + C2  # 销售价格等于C1+C2
+        ordering_cost = C2  # 订货成本等于过剩成本C2
+        prompt += f"The selling price is {selling_price} and the ordering cost (overage cost) is {ordering_cost}. "
+        prompt += "Please just output the optimal order quantity(a single number) for next day, omit the analysis process!"
+        return prompt
+
+
     def infer(self):
         client = OpenAI()
-        prompt = self.get_prompt()
+        # prompt = self.get_prompt()
+        prompt = self.get_prompt_new()
         response = client.chat.completions.create(
         model = self.model,
         messages=[
