@@ -54,6 +54,24 @@ class NewsboySimulator:
         
         return order_demand_list
 
+    def simulate_constOrder(self, days:int) -> list:
+        """
+        模拟报童模型，但是此时方便模型估计每天的订货量固定"""
+        # Initialize an empty list to store (order, demand) tuples
+        order_demand_list = []
+        
+        # Generate samples for demands
+        demands = self.sample(self.get_DemandLambda(), days)
+        order = self.sample(self.get_OrderLambda(), 1)[0]
+        # Generate (order, demand) tuples
+        for day in range(days):
+            demand = demands[day]
+            # If order is less than demand, observed demand is equal to order
+            observed_demand = min(order, demand)
+            order_demand_list.append((order, observed_demand))
+        
+        return order_demand_list
+    
 class Infer:
     def __init__(self, data):
         self.data = data
@@ -76,8 +94,48 @@ class PoissonInfer(Infer):
         estimated_lambda = np.mean(filtered_demand)
         return estimated_lambda
     
+    def grad(slef, x, Lambda, c, k):
+        numer = 0
+        denom = np.exp(Lambda)
+        tmp = [1]
+        for i in range(1,c+1):
+            tmp.append(tmp[-1]*Lambda/i)
+        for i in range(1,c+1):
+            numer += (i-Lambda)*tmp[i]/Lambda
+            denom -= tmp[i]
+        
+        return -k * numer/denom + np.sum(x[:len(x) - k])/Lambda - (len(x) - k)
+
+    def estimate_lambda_with_censored_data(self, x, c, k, error=1e-4, eta=1e-2, rho=0):
+        """
+        估计泊松分布的λ，考虑了censored data
+        参数:
+        x -- 观察到的需求数据
+        c -- 截尾值
+        k -- 刚好被截尾的数据的个数
+        error -- 误差
+        eta -- 学习率
+        rho -- 正则化参数
+        """
+        lambda0 = np.mean(x)
+        tmp = 1
+        step = 0
+        while tmp > error:
+            step += 1
+            g = self.grad(x,lambda0,c,k)
+            lambda0 = lambda0 + eta * (g - rho * lambda0)
+            tmp = np.abs(g - rho * lambda0)
+            if step % 1000 == 0:
+                print(tmp)
+        return lambda0
+
     def infer(self):
-        estimated_lambda = self.estimate_lambda()
+        # estimated_lambda = self.estimate_lambda()
+        # 使用截尾数据估计λ
+        observed_demands = [observed_demand for _, observed_demand in self.data]
+        const_order = self.data[0][0] # 订货量是固定的
+        censored_num = np.sum([1 for demand in observed_demands if demand == const_order])
+        estimated_lambda = self.estimate_lambda_with_censored_data(observed_demands, const_order, censored_num)
         # 计算临界比率
         critical_ratio = C1 / (C1 + C2)
         # 找到使CDF(λ)等于临界比率的最小订货量
