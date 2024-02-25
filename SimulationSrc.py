@@ -127,6 +127,7 @@ class PoissonInfer(Infer):
             tmp = np.abs(g - rho * lambda0)
             if step % 1000 == 0:
                 print(tmp)
+                print(lambda0)
         return lambda0
 
     def infer(self):
@@ -134,7 +135,7 @@ class PoissonInfer(Infer):
         # 使用截尾数据估计λ
         observed_demands = [observed_demand for _, observed_demand in self.data]
         const_order = self.data[0][0] # 订货量是固定的
-        censored_num = np.sum([1 for demand in observed_demands if demand == const_order])
+        censored_num = len([observed_demand for _, observed_demand in self.data if observed_demand == const_order])
         estimated_lambda = self.estimate_lambda_with_censored_data(observed_demands, const_order, censored_num)
         # 计算临界比率
         critical_ratio = C1 / (C1 + C2)
