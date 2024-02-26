@@ -94,17 +94,52 @@ class PoissonInfer(Infer):
         estimated_lambda = np.mean(filtered_demand)
         return estimated_lambda
     
-    def grad(slef, x, Lambda, c, k):
+    def grad_with_const_order(slef, x, Lambda, c, k):
+        """
+        计算每天订货量相同的情况下的梯度
+        """
         numer = 0
-        denom = np.exp(Lambda)
-        tmp = [1]
-        for i in range(1,c+1):
-            tmp.append(tmp[-1]*Lambda/i)
-        for i in range(1,c+1):
+        denom = np.exp(Lambda) # Initialize denom with e^Lambda
+        # Precompute Lambda^j / j! for all j up to c
+        tmp = [1] # tmp[0] = Lambda^0 / 0!
+
+        for i in range(1, c+1):
+            tmp.append(tmp[-1]*Lambda/i) # Compute Lambda^j / j! and store
+
+        denom -= sum(tmp) # Subtract the sum of Lambda^j / j! terms from denom
+
+        for i in range(0, c+1):
             numer += (i-Lambda)*tmp[i]/Lambda
-            denom -= tmp[i]
+            # numer += (i-Lambda)*tmp[i]
+        # 从k+1到n的需求量的和
+        return -k * numer/denom + np.sum(x[k:])/Lambda - (len(x) - k)
+
+    def grad(self, x, Lambda, c, k):
+        """
+        计算每天订货量不同的情况下的梯度
+        """
+        n = len(x)
+        total_sum_first_part = 0
         
-        return -k * numer/denom + np.sum(x[:len(x) - k])/Lambda - (len(x) - k)
+        for i in range(1, k + 1):
+            c_i = c[i - 1]  # Assuming c is a list with each c_i value
+            numer = 0
+            denom = np.exp(Lambda)  # Initialize denom with e^Lambda 
+            tmp = [1]  # tmp[0] = Lambda^0 / 0!
+            
+            for j in range(1, c_i + 1):
+                tmp.append(tmp[-1] * Lambda / j)  # Compute Lambda^j / j! from 1 to c_i and store
+            
+            denom -= sum(tmp)  # Subtract the sum of Lambda^j / j! terms from denom
+
+            for j in range(c_i + 1):
+                numer += (j - Lambda) * tmp[j] / Lambda # Compute the numerator
+            
+            total_sum_first_part += numer / denom
+        
+        sum_second_part = np.sum(x[k:n]) / Lambda - (n - k)
+        
+        return -total_sum_first_part + sum_second_part
 
     def estimate_lambda_with_censored_data(self, x, c, k, error=1e-4, eta=1e-2, rho=0):
         """
@@ -122,6 +157,23 @@ class PoissonInfer(Infer):
         step = 0
         while tmp > error:
             step += 1
+            g = self.grad_with_const_order(x,lambda0,c,k)
+            lambda0 = lambda0 + eta * (g - rho * lambda0)
+            tmp = np.abs(g - rho * lambda0)
+            if step % 1000 == 0:
+                print(tmp)
+                print(lambda0)
+        return lambda0
+
+    def estimate_lambda(self, x, c, k, error=1e-4, eta=1e-2, rho=0):
+        """
+        同上，不过c此时是一个列表，表示的截尾值
+        """
+        lambda0 = np.mean(x)
+        tmp = 1
+        step = 0
+        while tmp > error:
+            step += 1
             g = self.grad(x,lambda0,c,k)
             lambda0 = lambda0 + eta * (g - rho * lambda0)
             tmp = np.abs(g - rho * lambda0)
@@ -130,13 +182,34 @@ class PoissonInfer(Infer):
                 print(lambda0)
         return lambda0
 
-    def infer(self):
+
+    def infer_constOrder(self):
         # estimated_lambda = self.estimate_lambda()
         # 使用截尾数据估计λ
-        observed_demands = [observed_demand for _, observed_demand in self.data]
         const_order = self.data[0][0] # 订货量是固定的
+        # 重新排列observed_demands，使得订货量等于观察到的需求的排在前面
+        observed_demands = [observed_demand for _, observed_demand in self.data if observed_demand == const_order] + [observed_demand for _, observed_demand in self.data if observed_demand != const_order]
         censored_num = len([observed_demand for _, observed_demand in self.data if observed_demand == const_order])
         estimated_lambda = self.estimate_lambda_with_censored_data(observed_demands, const_order, censored_num)
+        # 计算临界比率
+        critical_ratio = C1 / (C1 + C2)
+        # 找到使CDF(λ)等于临界比率的最小订货量
+        optimal_order = poisson.ppf(critical_ratio, estimated_lambda)
+        return optimal_order
+
+    def infer(self):
+        """
+        这种推理的方式更加通用，可以不固定需求进行输入
+        """
+        # 提取observed_demands和order，使得订货量等于观察到的需求的排在前面，且分别与之对应
+        orders = [order for order, observed_demand in self.data if observed_demand == order] + [order for order, observed_demand in self.data if observed_demand != order]
+        observed_demands = [observed_demand for order, observed_demand in self.data if observed_demand == order] + [observed_demand for order, observed_demand in self.data if observed_demand != order]
+        k = len([observed_demand for order, observed_demand in self.data if observed_demand == order])
+        # check 前k个需求等于订货量
+        if k >= 1:
+            assert all([orders[i] == observed_demands[i] for i in range(k)]), "前k个需求不等于订货量"
+        # 估计λ
+        estimated_lambda = self.estimate_lambda(observed_demands, orders, k)
         # 计算临界比率
         critical_ratio = C1 / (C1 + C2)
         # 找到使CDF(λ)等于临界比率的最小订货量
