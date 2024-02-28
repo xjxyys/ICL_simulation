@@ -263,8 +263,35 @@ class ChatGPTInfer(Infer):
         prompt += f"The selling price is {selling_price} and the ordering cost (overage cost) is {ordering_cost}. "
         prompt += "Please just output the optimal order quantity(a single number) for next day, omit the analysis process!"
         return prompt
+    
+    def get_prompt_cot(self):
+        """告诉GPT这是报童模型，并利用COT的方式，让GPT think step by step
+        """
+        prompt = "Utilize the provided historical order and demand data to deduce the optimal order quantity according to the **newsboy model**. "
+        # prompt += "Based on the historical order and demand data provided below, infer the optimal order quantity. "
+        prompt += "The data consists of tuples representing the order quantity and the observed demand for each day: "
+        prompt += str(self.data) + " "
+        # 使用销售价格和订货成本
+        selling_price = C1 + C2  # 销售价格等于C1+C2
+        ordering_cost = C2  # 订货成本等于过剩成本C2
+        prompt += f"The selling price is {selling_price} and the ordering cost (overage cost) is {ordering_cost}. "
+        prompt += "You should think step by step and output the reasoning process."
+        # think step by step输出推理过程，但是最后一行只输出最优订货量
+        prompt += "Pay attention to the last line, which should only output the optimal order quantity for the next day(a single number)!"
+        return prompt
 
-
+    def infer_cot(self):
+        client = OpenAI()
+        prompt = self.get_prompt_cot()
+        response = client.chat.completions.create(
+        model = self.model,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", 'content': prompt}
+        ]
+        )
+        return response.choices[0].message.content
+    
     def infer(self):
         client = OpenAI()
         # prompt = self.get_prompt()
