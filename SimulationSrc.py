@@ -6,6 +6,8 @@ import openai
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+from lifelines import KaplanMeierFitter
+
 
 # 报童模型的脱销损失C1和滞销损失C2
 C1 = 7
@@ -74,6 +76,7 @@ class NewsboySimulator:
     
 class Infer:
     def __init__(self, data):
+        # [(order, observed_demand), ...]
         self.data = data
     
     def infer(self):
@@ -235,6 +238,50 @@ class EmpiricalInfer(Infer):
                 break
         return optimal_order
     
+class KaplanMeierInfer(Infer):
+    def estimate_survival_function(self):
+        "Estimate the survival function using the Kaplan-Meier model"
+        # Create arrays for the observed demands and a boolean for censoring
+        survival_function = {}
+        observations = sorted(self.data, key=lambda x: x[1])
+        n = len(observations)
+        censored = [d[0] == d[1] for d in observations]
+
+        survival_prob = 1
+        for i, (order, demand) in enumerate(observations):
+            if not censored[i]:
+                at_risk = n - i
+                events = 1 # 当前点为事件发生点
+                survival_prob *= (at_risk - events) / at_risk
+            survival_function[demand] = survival_prob
+
+        return survival_function
+
+    def infer(self):
+        """
+        Infer the optimal order quantity using the Kaplan-Meier model
+        """
+        survival_function = self.estimate_survival_function()
+
+        # convert the survival function to a cumulative distribution function
+        # cdf = {}
+        # prev_prob = 1
+        # for demand, prob in survival_function.items():
+        #     cdf[demand] = prev_prob - prob
+        #     prev_prob = prob
+        cdf = {demand: 1 - prob for demand, prob in survival_function.items()}
+        
+        # 计算临界比率
+        critical_ratio = C1 / (C1 + C2)
+        # 找到使生存函数等于临界比率的最小需求量
+        optimal_order_quantity = None
+        for demand, prob in sorted(cdf.items()):
+            if prob >= critical_ratio:
+                optimal_order_quantity = demand
+                break
+
+        return optimal_order_quantity
+
 class ChatGPTInfer(Infer):
 
     def __init__(self, data, model="gpt-4-0125-preview"):
