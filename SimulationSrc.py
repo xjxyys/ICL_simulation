@@ -12,6 +12,8 @@ from lifelines import KaplanMeierFitter
 # 报童模型的脱销损失C1和滞销损失C2
 C1 = 7
 C2 = 4
+# inventory cost
+C3 = 3
 
 # 设置代理，本机端口7890
 # os.environ['http_proxy'] = 'http://127.0.0.1:7890'
@@ -74,6 +76,29 @@ class NewsboySimulator:
         
         return order_demand_list
     
+class InventorySimulator(NewsboySimulator):
+    """This class simulates the inventory system of a general store."""
+    def simulate(self, days:int) -> list:
+        # Initialize an empty list to store (order, demand, inventory) tuples
+        # inventory represents the remaining inventory at the end of the day
+        order_demand_list = []
+        
+        inventory = 0
+        # Generate samples for orders and demands
+        orders = self.sample(self.get_OrderLambda(), days)
+        demands = self.sample(self.get_DemandLambda(), days)
+        
+        # Generate (order, demand) tuples
+        for day in range(days):
+            order = orders[day]
+            demand = demands[day]
+            # If order plus inventory is greater than demand, observed demand is equal to demand
+            observed_demand = min(order + inventory, demand)
+            # Calculate the remaining inventory at the end of the day
+            inventory = inventory + order - observed_demand
+            order_demand_list.append((order, observed_demand, inventory))
+        return order_demand_list
+
 class Infer:
     def __init__(self, data):
         # [(order, observed_demand), ...]
@@ -287,6 +312,7 @@ class ChatGPTInfer(Infer):
     def __init__(self, data, model="gpt-4-0125-preview"):
         self.data = data
         self.model = model
+        self.client = OpenAI()
         
     def get_prompt(self):
     
@@ -340,10 +366,9 @@ class ChatGPTInfer(Infer):
         return response.choices[0].message.content
     
     def infer(self):
-        client = OpenAI()
         # prompt = self.get_prompt()
         prompt = self.get_prompt_new()
-        response = client.chat.completions.create(
+        response = self.client.chat.completions.create(
         model = self.model,
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
@@ -351,7 +376,81 @@ class ChatGPTInfer(Infer):
         ]
         )
         return response.choices[0].message.content
-    
+
+class Inventory_GPTInfer(ChatGPTInfer):
+    def __init__(self, data, model="gpt-4-0125-preview"):
+        super().__init__(data, model)
+        self.selling_price = C1 + C2 # 销售价格等于C1+C2
+        self.ordering_cost = C2 # 订货成本等于过剩成本C2
+        self.inventory_cost = C3 # 库存成本
+
+        
+    def get_prompt_inventory(self):
+        prompt = "Given the historical order, demand, and end-of-day inventory data below, determine the optimal order quantity. "
+        prompt += "The data is presented as tuples in the format (order quantity, observed demand, end-of-day inventory): "
+        prompt += str(self.data) + " "
+        prompt += f"The selling price per unit is ${self.selling_price}, the ordering cost per unit is ${self.ordering_cost}, and the inventory cost per unit per day is ${self.inventory_cost}. "
+        prompt += "Analyze the data step by step to infer the reasoning process behind determining the optimal order quantity. "
+        prompt += "The conclusion should clearly state the optimal order quantity for the next day as a single number."
+        return prompt
+
+    def get_reward(self, data):
+        """
+        Input: data -- list of tuples (order, observed_demand, inventory)
+        output: every day's reward
+        """
+        rewards = []
+        for order, observed_demand, inventory in data:
+            # 计算每天的收益, 要注意inventory是上一天结束的库存
+            revenue = observed_demand * self.selling_price # 销售收入
+            ordering_cost = order * self.ordering_cost
+            # 注意是要得到上一天结束时候的库存
+            last_day_inventory = inventory + observed_demand - order
+            inventory_cost = last_day_inventory * self.inventory_cost
+
+            reward = revenue - ordering_cost - inventory_cost
+            rewards.append(reward)
+        return rewards
+
+
+    def get_prompt_rl(self):
+
+        # 把每天的收益算出来，类似给出一个reward给GPT
+        rewards = self.get_reward(self.data)
+        new_data = [((order, observed_demand, inventory), reward) for (order, observed_demand, inventory), reward in zip(self.data, rewards)]
+        prompt = "Given the historical order, demand, end-of-day inventory data and the corresponding profit below, determine the optimal order quantity. "
+        prompt += "The data is presented as tuples in the format ((order quantity, observed demand, end-of-day inventory), profit): "
+        prompt += str(new_data) + " "
+        prompt += f"The selling price per unit is ${self.selling_price}, the ordering cost per unit is ${self.ordering_cost}, and the inventory cost per unit per day is ${self.inventory_cost}. "
+        prompt += "Analyze the provided data to understand the relationship between order quantities, sales, and profits. "
+        prompt += "Your task is to determine the most profitable order quantity for the next day based on this analysis. "
+        prompt += "Conclude your reasoning with the recommended order quantity as a single number, which you believe will maximize the profit for the next day."
+        # prompt += "The conclusion should clearly state the optimal order quantity for the next day as a single number."
+        return prompt
+
+    def infer(self):
+        prompt = self.get_prompt_inventory()
+        response = self.client.chat.completions.create(
+        model = self.model,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", 'content': prompt}
+        ]
+        )
+        return response.choices[0].message.content
+        
+    def infer_rl(self):
+        prompt = self.get_prompt_rl()
+        response = self.client.chat.completions.create(
+        model = self.model,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", 'content': prompt}
+        ]
+        )
+        return response.choices[0].message.content
+
+
 def get_average_cost(order, DemandLambda):
     """
     计算给定订货量、需求率和成本条件下的平均成本。
